@@ -244,7 +244,7 @@ impl Docker {
 
                 self.process_into_value(req).await
             }
-            Err(e) => Err(e.into()),
+            Err(e) => Err(Error::CredentialsJsonError { serde_err: e }),
         }
     }
 
@@ -413,7 +413,7 @@ impl Docker {
 
                 self.process_into_value(req).await
             }
-            Err(e) => Err(e.into()),
+            Err(e) => Err(Error::CredentialsJsonError { serde_err: e }),
         }
     }
 }
