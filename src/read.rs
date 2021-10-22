@@ -142,7 +142,9 @@ where
                 // OSX will not send a newline for some API endpoints (`/events`),
                 if src[src.len() - 1] == b'}' {
                     let slice = src.split_to(src.len());
-                    decode_json_from_slice(&slice)
+                    // If we fail to parse, the closing brace found is for a nested object.
+                    // Return Ok(None) so more data is read.
+                    decode_json_from_slice(&slice).or(Ok(None))
                 } else {
                     Ok(None)
                 }
@@ -230,5 +232,21 @@ where
 
             return Poll::Ready(Ok(()));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_util::codec::FramedRead;
+
+    #[test]
+    pub fn decode_on_incomplete_line_that_ends_on_brace_returns_ok_none() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Placeholder {}
+
+        let mut decoder = JsonLineDecoder::<Placeholder>::new();
+        let mut data = BytesMut::from("{\"a\": 1, \"b\": {\"c\": false}");
+        assert_eq!(decoder.decode(&mut data).unwrap(), None);
     }
 }
