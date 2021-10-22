@@ -77,11 +77,30 @@ pub enum Error {
         api_version: String,
     },
     /// Error emitted when JSON fails to serialize.
-    #[error(transparent)]
-    JsonSerdeError {
+    #[error("Failed to serialize into JSON: {message}")]
+    JsonSerializationError {
+        /// Short section of the json close to the error.
+        message: String,
+        /// Entire JSON payload.
+        contents: String,
+        /// Character sequence at error location.
+        column: usize,
+    },
+    /// Error facilitating debugging failed JSON parsing.
+    #[error("Failed to deserialize from JSON: {message}")]
+    JsonDeserializationError {
+        /// Short section of the json close to the error.
+        message: String,
+        /// Entire JSON payload.
+        contents: String,
+        /// Character sequence at error location.
+        column: usize,
+    },
+    /// Error emitted when there is a problem serializing the credentials
+    #[error("Failed to serialize credentials")]
+    CredentialsJsonError {
         /// The original error emitted by serde.
-        #[from]
-        err: serde_json::Error,
+        serde_err: serde_json::Error,
     },
     /// Error emitted when log output generates an I/O error.
     #[error(transparent)]

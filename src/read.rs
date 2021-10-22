@@ -18,6 +18,7 @@ use crate::container::LogOutput;
 
 use crate::errors::Error;
 use crate::errors::Error::JsonDataError;
+use crate::errors::Error::JsonDeserializationError;
 
 #[derive(Debug, Copy, Clone)]
 enum NewlineLogOutputDecoderState {
@@ -119,7 +120,11 @@ fn decode_json_from_slice<T: DeserializeOwned>(slice: &[u8]) -> Result<T, Error>
             column: e.column(),
             contents: String::from_utf8_lossy(slice).to_string(),
         }),
-        Err(e) => Err(e.into()),
+        Err(e) => Err(JsonDeserializationError {
+            message: e.to_string(),
+            column: e.column(),
+            contents: String::from_utf8_lossy(slice).to_string(),
+        }),
     }
 }
 

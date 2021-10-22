@@ -869,7 +869,13 @@ impl Docker {
     {
         match body.map(|inst| serde_json::to_string(&inst)) {
             Some(Ok(res)) => Ok(Some(res)),
-            Some(Err(e)) => Err(e.into()),
+            Some(Err(e)) => {
+                Err(JsonSerializationError {
+                    message: e.to_string(),
+                    column: e.column(),
+                    contents: format!("{:?}", e),
+                })
+            },
             None => Ok(None),
         }
         .map(|payload| {
@@ -1075,7 +1081,11 @@ impl Docker {
                     contents: contents.to_owned(),
                 }
             } else {
-                e.into()
+                JsonDeserializationError {
+                    message: e.to_string(),
+                    column: e.column(),
+                    contents: contents.to_owned(),
+                }
             }
         })
     }

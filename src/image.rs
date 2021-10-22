@@ -548,7 +548,7 @@ impl Docker {
                 );
                 self.process_into_stream(req).boxed()
             }
-            Err(e) => stream::once(async move { Err(Error::from(e)) }).boxed(),
+            Err(e) => stream::once(async move { Err(Error::CredentialsJsonError { serde_err: e }) }).boxed(),
         }
     }
 
@@ -785,7 +785,7 @@ impl Docker {
                 );
                 self.process_into_value(req).await
             }
-            Err(e) => Err(e.into()),
+            Err(e) => Err(Error::CredentialsJsonError { serde_err: e }),
         }
     }
 
@@ -906,7 +906,7 @@ impl Docker {
 
                 self.process_into_stream(req).boxed()
             }
-            Err(e) => stream::once(async move { Err(e.into()) }).boxed(),
+            Err(e) => stream::once(async move { Err(Error::CredentialsJsonError { serde_err: e }) }).boxed(),
         }
     }
 
@@ -1040,7 +1040,7 @@ impl Docker {
 
                 self.process_into_stream(req).boxed()
             }
-            Err(e) => stream::once(async move { Err(e.into()) }).boxed(),
+            Err(e) => stream::once(async move { Err(Error::CredentialsJsonError { serde_err: e }) }).boxed(),
         }
     }
 
@@ -1155,7 +1155,7 @@ impl Docker {
                 );
                 self.process_into_stream(req).boxed()
             }
-            Err(e) => stream::once(async move { Err(e.into()) }).boxed(),
+            Err(e) => stream::once(async move { Err(Error::CredentialsJsonError { serde_err: e }) }).boxed(),
         }
     }
 }
