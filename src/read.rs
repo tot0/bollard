@@ -151,6 +151,12 @@ where
                     // Return Ok(None) so more data is read.
                     decode_json_from_slice(&slice).or(Ok(None))
                 } else {
+                    // We can receive a dangling carriage return. Just consume it and return
+                    // Ok(None).
+                    if src.len() == 1 && src[0] == b'\r' {
+                        let _ = src.split_to(1);
+                    }
+
                     Ok(None)
                 }
             }
@@ -243,7 +249,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio_util::codec::FramedRead;
 
     #[test]
     pub fn decode_on_incomplete_line_that_ends_on_brace_returns_ok_none() {
@@ -253,5 +258,16 @@ mod tests {
         let mut decoder = JsonLineDecoder::<Placeholder>::new();
         let mut data = BytesMut::from("{\"a\": 1, \"b\": {\"c\": false}");
         assert_eq!(decoder.decode(&mut data).unwrap(), None);
+    }
+
+    #[test]
+    pub fn decode_on_carriage_return_returns_ok_none_and_consumes_buffer() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Placeholder {}
+
+        let mut decoder = JsonLineDecoder::<Placeholder>::new();
+        let mut data = BytesMut::from("\r");
+        assert_eq!(decoder.decode(&mut data).unwrap(), None);
+        assert!(data.is_empty());
     }
 }
