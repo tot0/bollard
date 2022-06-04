@@ -259,6 +259,7 @@ pub mod service;
 pub mod system;
 mod uri;
 pub mod volume;
+pub mod swarm;
 
 // publicly re-export
 pub use crate::docker::{ClientVersion, Docker, API_DEFAULT_VERSION};
