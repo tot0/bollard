@@ -1,17 +1,14 @@
 //! Swarm API: Docker swarm is a container orchestration tool, meaning that it allows the user to manage multiple containers deployed across multiple host machines.
 
 use http::request::Builder;
-use hyper::{Body, Method};
+use hyper::Method;
 use serde::ser::Serialize;
 
 use std::cmp::Eq;
-use std::collections::HashMap;
 use std::hash::Hash;
 
 use super::Docker;
 use crate::errors::Error;
-
-use crate::models::*;
 
 /// Swam configuration used in the [Init Swarm API](Docker::init_swarm())
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -24,6 +21,7 @@ where
     pub advertise_addr: T,
 }
 
+/// Swam configuration used in the [Join Swarm API](Docker::join_swarm())
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct JoinSwarmOptions<T>
 where
@@ -32,14 +30,13 @@ where
     /// Externally reachable address advertised to other nodes.
     pub advertise_addr: T,
     /// Secret token for joining this swarm
-    pub join_token
+    pub join_token: T,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+/// Swam configuration used in the [Leave Swarm API](Docker::leave_swarm())
+#[derive(Debug, Copy, Clone, Default, Serialize)]
 #[serde(rename_all = "PascalCase")]
-pub struct LeaveSwarmOptions<T>
-where
-    T: Into<String> + Serialize,
+pub struct LeaveSwarmOptions
 {
     /// Force to leave to swarm.
     pub force: bool,
@@ -157,9 +154,9 @@ impl Docker {
     ///
     /// docker.leave_swarm();
     /// ```
-    pub async fn leave_swarm<T>(
+    pub async fn leave_swarm(
         &self,
-        config: LeaveSwarmOptions<T>
+        config: LeaveSwarmOptions
     ) -> Result<(), Error> {
         let url = "/swarm/leave";
 
