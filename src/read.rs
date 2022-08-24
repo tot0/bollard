@@ -1,3 +1,4 @@
+use bytes::Buf;
 use bytes::BytesMut;
 use futures_core::Stream;
 use hyper::body::Bytes;
@@ -6,11 +7,7 @@ use serde::de::DeserializeOwned;
 use std::pin::Pin;
 use std::string::String;
 use std::task::{Context, Poll};
-use std::{
-    cmp,
-    io,
-    marker::PhantomData,
-};
+use std::{cmp, io, marker::PhantomData};
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio_util::codec::Decoder;
 
@@ -18,7 +15,6 @@ use crate::container::LogOutput;
 
 use crate::errors::Error;
 use crate::errors::Error::JsonDataError;
-use crate::errors::Error::JsonDeserializationError;
 
 #[derive(Debug, Copy, Clone)]
 enum NewlineLogOutputDecoderState {
@@ -107,7 +103,7 @@ impl<T> JsonLineDecoder<T> {
     }
 }
 
-fn decode_json_from_slice<T: DeserializeOwned>(slice: &[u8]) -> Result<T, Error> {
+fn decode_json_from_slice<T: DeserializeOwned>(slice: &[u8]) -> Result<Option<T>, Error> {
     debug!(
         "Decoding JSON line from stream: {}",
         String::from_utf8_lossy(slice).to_string()
@@ -120,11 +116,8 @@ fn decode_json_from_slice<T: DeserializeOwned>(slice: &[u8]) -> Result<T, Error>
             column: e.column(),
             contents: String::from_utf8_lossy(slice).to_string(),
         }),
-        Err(e) => Err(JsonDeserializationError {
-            message: e.to_string(),
-            column: e.column(),
-            contents: String::from_utf8_lossy(slice).to_string(),
-        }),
+        Err(e) if e.is_eof() => Ok(None),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -139,25 +132,34 @@ where
 
         if !src.is_empty() {
             if let Some(pos) = nl_index {
-                let slice = src.split_to(pos + 1);
-                let slice = &slice[..slice.len() - 1];
+                let remainder = src.split_off(pos + 1);
+                let slice = &src[..src.len() - 1];
 
-                decode_json_from_slice(&slice)
+                match decode_json_from_slice(slice) {
+                    Ok(None) => {
+                        // Unescaped newline inside the json structure
+                        src.truncate(src.len() - 1); // Remove the newline
+                        src.unsplit(remainder);
+                        Ok(None)
+                    },
+                    Ok(json) => {
+                        // Newline delimited json
+                        src.unsplit(remainder);
+                        src.advance(pos + 1);
+                        Ok(json)
+                    },
+                    Err(e) => Err(e)
+                }
+            
             } else {
-                // OSX will not send a newline for some API endpoints (`/events`),
-                if src[src.len() - 1] == b'}' {
-                    let slice = src.split_to(src.len());
-                    // If we fail to parse, the closing brace found is for a nested object.
-                    // Return Ok(None) so more data is read.
-                    decode_json_from_slice(&slice).or(Ok(None))
-                } else {
-                    // We can receive a dangling carriage return. Just consume it and return
-                    // Ok(None).
-                    if src.len() == 1 && src[0] == b'\r' {
-                        let _ = src.split_to(1);
-                    }
-
-                    Ok(None)
+                // No newline delimited json. 
+                match decode_json_from_slice(src) {
+                    Ok(None) => Ok(None),
+                    Ok(json) => {
+                        src.clear();
+                        Ok(json)
+                    },
+                    Err(e) => Err(e)
                 }
             }
         } else {
@@ -248,26 +250,105 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashMap;
+
+    use bytes::{BufMut, BytesMut};
+    use tokio_util::codec::Decoder;
+
+    use super::JsonLineDecoder;
 
     #[test]
-    pub fn decode_on_incomplete_line_that_ends_on_brace_returns_ok_none() {
-        #[derive(Debug, Deserialize, PartialEq)]
-        struct Placeholder {}
+    fn json_decode_empty() {
+        let mut buf = BytesMut::from(&b""[..]);
+        let mut codec: JsonLineDecoder<()> = JsonLineDecoder::new();
 
-        let mut decoder = JsonLineDecoder::<Placeholder>::new();
-        let mut data = BytesMut::from("{\"a\": 1, \"b\": {\"c\": false}");
-        assert_eq!(decoder.decode(&mut data).unwrap(), None);
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
     }
 
     #[test]
-    pub fn decode_on_carriage_return_returns_ok_none_and_consumes_buffer() {
-        #[derive(Debug, Deserialize, PartialEq)]
-        struct Placeholder {}
+    fn json_decode() {
+        let mut buf = BytesMut::from(&b"{}\n{}\n\n{}\n"[..]);
+        let mut codec: JsonLineDecoder<HashMap<(), ()>> = JsonLineDecoder::new();
 
-        let mut decoder = JsonLineDecoder::<Placeholder>::new();
-        let mut data = BytesMut::from("\r");
-        assert_eq!(decoder.decode(&mut data).unwrap(), None);
-        assert!(data.is_empty());
+        assert_eq!(codec.decode(&mut buf).unwrap(), Some(HashMap::new()));
+        assert_eq!(codec.decode(&mut buf).unwrap(), Some(HashMap::new()));
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        assert_eq!(codec.decode(&mut buf).unwrap(), Some(HashMap::new()));
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn json_partial_decode() {
+        let mut buf = BytesMut::from(&b"{}\n{}\n\n{"[..]);
+        let mut codec: JsonLineDecoder<HashMap<(), ()>> = JsonLineDecoder::new();
+
+        assert_eq!(codec.decode(&mut buf).unwrap(), Some(HashMap::new()));
+        assert_eq!(buf, &b"{}\n\n{"[..]);
+        assert_eq!(codec.decode(&mut buf).unwrap(), Some(HashMap::new()));
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        assert_eq!(buf, &b"{"[..]);
+        buf.put(&b"}"[..]);
+        assert_eq!(codec.decode(&mut buf).unwrap(), Some(HashMap::new()));
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn json_partial_decode_no_newline() {
+        let mut buf = BytesMut::from(&b"{\"status\":\"Extracting\",\"progressDetail\":{\"current\":33980416,\"total\":102266715}"[..]);
+        let mut codec: JsonLineDecoder<crate::models::CreateImageInfo> = JsonLineDecoder::new();
+
+        let expected = crate::models::CreateImageInfo {
+            status: Some(String::from("Extracting")),
+            progress_detail: Some(crate::models::ProgressDetail {
+                current: Some(33980416),
+                total: Some(102266715),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        assert_eq!(buf, &b"{\"status\":\"Extracting\",\"progressDetail\":{\"current\":33980416,\"total\":102266715}"[..]);
+        buf.put(&b"}"[..]);
+        assert_eq!(codec.decode(&mut buf).unwrap(), Some(expected));
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn json_partial_decode_newline() {
+        let mut buf = BytesMut::from(&b"{\"status\":\"Extracting\",\"progressDetail\":{\"current\":33980416,\"total\":102266715}\n"[..]);
+        let mut codec: JsonLineDecoder<crate::models::CreateImageInfo> = JsonLineDecoder::new();
+
+        let expected = crate::models::CreateImageInfo {
+            status: Some(String::from("Extracting")),
+            progress_detail: Some(crate::models::ProgressDetail {
+                current: Some(33980416),
+                total: Some(102266715),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(codec.decode(&mut buf).unwrap(), None);
+        assert_eq!(buf, &b"{\"status\":\"Extracting\",\"progressDetail\":{\"current\":33980416,\"total\":102266715}"[..]);
+        buf.put(&b"}"[..]);
+        assert_eq!(codec.decode(&mut buf).unwrap(), Some(expected));
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn json_decode_escaped_newline() {
+        let mut buf = BytesMut::from(&b"\"foo\\nbar\""[..]);
+        let mut codec: JsonLineDecoder<String> = JsonLineDecoder::new();
+
+        assert_eq!(codec.decode(&mut buf).unwrap(), Some(String::from("foo\nbar")));
+    }
+
+    #[test]
+    fn json_decode_lacking_newline() {
+        env_logger::try_init().unwrap();
+        let mut buf = BytesMut::from(&b"{}"[..]);
+        let mut codec: JsonLineDecoder<HashMap<(), ()>> = JsonLineDecoder::new();
+
+        assert_eq!(codec.decode(&mut buf).unwrap(), Some(HashMap::new()));
+        assert!(buf.is_empty());
     }
 }
